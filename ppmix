@@ -1,0 +1,86 @@
+#!/usr/bin/env perl
+# 
+# Copyright 2021 Ivan Kovmir
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+use strict;
+use warnings;
+
+# Exit if sysctl hw.snd.verbose value is not high enough.
+#
+# This is required to analyze virtual channels through which you can
+# control volume for programs individually.
+# See also: sysctl(8), sound(4).
+if (`sysctl -n hw.snd.verbose` < 2) {
+	print "'hw.snd.verbose' must be more than 1\n";
+	exit 1;
+}
+
+# Returns all programs using the mixer.
+sub parse_chans {
+	my @programs;
+	my @tmp;
+
+	# Get all the programs using the sound mixer.
+	open(my $sndstat, "<", "/dev/sndstat") or die "Cannot open /dev/sndstat: $!";
+	while (<$sndstat>) {
+		if (/pid/) {
+			chomp;
+			@tmp = split / /;
+			push @programs, [$tmp[10], $tmp[0]];
+		}
+	}
+	# Get rid of unnecessary output.
+	foreach my $aref (@programs) {
+		@tmp = split /:/, $aref->[1];
+		$tmp[1] =~ s/play/pcm/;
+		$tmp[1] =~ s/record/rec/;
+		$tmp[4] =~ s/[^a-z0-9.]//g;
+
+		$aref->[0] =~ s/[^A-Za-z]//g; # Program name
+		$aref->[1] = $tmp[4];	      # Device name
+		$aref->[2] = $tmp[1];	      # Type pcm/rec
+	}
+	return @programs;
+}
+
+# Handles the given channel.
+sub handle_chan {
+	my $chan = shift @_;
+	if (@ARGV == 1) {
+		print "$chan->[0] ($chan->[1]):\n\t";
+		system "mixer -f /dev/$chan->[1]";
+	} elsif (@ARGV == 2) {
+		print "$chan->[0] ($chan->[1]):\n\t";
+		system "mixer -f /dev/$chan->[1] $chan->[2] $ARGV[1]";
+	} elsif (@ARGV == 3 and $chan->[2] eq $ARGV[1]) {
+		print "$chan->[0] ($chan->[1]):\n\t";
+		system "mixer -f /dev/$chan->[1] $chan->[2] $ARGV[2]";
+	}
+}
+
+my @chans = parse_chans();
+foreach my $chan (@chans) {
+	# Print all of them if no arguments are given.
+	if (@ARGV == 0) {
+		print "$chan->[0] ($chan->[1]):\n\t";
+		system "mixer -f /dev/$chan->[1]";
+	} else {
+		# Find the one that we need and handle it,
+		# if there are some arguments passed.
+		if ($chan->[0] eq $ARGV[0]) {
+			handle_chan $chan;
+		}
+	}
+}
